@@ -12,9 +12,10 @@ GameObject:
   - component: {fileID: 1716012462709883105}
   - component: {fileID: 2187200448107655092}
   - component: {fileID: 3587832592117085227}
+  - component: {fileID: 4845086246946433394}
   m_Layer: 0
   m_Name: Alien
-  m_TagString: Untagged
+  m_TagString: Alien
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -114,3 +115,16 @@ CapsuleCollider:
   m_Height: 2
   m_Direction: 1
   m_Center: {x: 0, y: 0, z: 0}
+--- !u!114 &4845086246946433394
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 802184005507008370}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 03941a4306da8c447afa889b3aaa1038, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Alien
+  alienManager: {fileID: 0}

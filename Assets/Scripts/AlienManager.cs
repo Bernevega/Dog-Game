@@ -275,6 +275,18 @@ public class AlienManager : MonoBehaviour
             maxNearbyAliens = maxTotalAliensAlive;
     }
 
+    public void RemoveAlien(GameObject alien)
+    {
+        if (alien == null)
+            return;
+
+        if (despawnTimers.ContainsKey(alien))
+            despawnTimers.Remove(alien);
+
+        if (activeAliens.Contains(alien))
+            activeAliens.Remove(alien);
+    }
+
     private void OnDrawGizmos()
     {
         if (!showGizmos || player == null)
