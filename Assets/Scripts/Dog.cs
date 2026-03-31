@@ -11,6 +11,7 @@ public sealed class Dog : MonoBehaviour
         Wandering,
         Waiting,
         WatchingPlayer,
+        WatchingAlien,
         ReturningToPlayer
     }
 
@@ -23,6 +24,17 @@ public sealed class Dog : MonoBehaviour
 
     [Min(0f)]
     [SerializeField] private float proximityRadius = 2f;
+
+    [Header("Alien Detection")]
+    [SerializeField] private string alienTag = "alien";
+
+    [Min(0f)]
+    [SerializeField] private float alienDetectionRadius = 4f;
+
+    [Min(1)]
+    [SerializeField] private int maxAlienColliders = 16;
+
+    [SerializeField] private LayerMask alienDetectionLayers = ~0;
 
     [Header("Wander Settings")]
     [Min(1)]
@@ -55,6 +67,7 @@ public sealed class Dog : MonoBehaviour
     [SerializeField] private bool drawGizmos = true;
     [SerializeField] private Color wanderRadiusColor = Color.green;
     [SerializeField] private Color proximityRadiusColor = Color.yellow;
+    [SerializeField] private Color alienDetectionRadiusColor = Color.red;
     [SerializeField] private Color destinationColor = Color.cyan;
 
     private NavMeshAgent agent;
@@ -66,11 +79,16 @@ public sealed class Dog : MonoBehaviour
 
     private float wanderRadiusSqr;
     private float proximityRadiusSqr;
+    private float alienDetectionRadiusSqr;
+
+    private Collider[] alienDetectionResults;
+    private Transform currentAlienTarget;
 
     private void Awake()
     {
         agent = GetComponent<NavMeshAgent>();
         CacheDerivedValues();
+        AllocateAlienDetectionBuffer();
     }
 
     private void OnValidate()
@@ -79,6 +97,7 @@ public sealed class Dog : MonoBehaviour
             maxWaitTime = minWaitTime;
 
         CacheDerivedValues();
+        AllocateAlienDetectionBuffer();
     }
 
     private void Start()
@@ -109,6 +128,34 @@ public sealed class Dog : MonoBehaviour
             return;
 
         float sqrDistanceToPlayer = GetFlatSqrDistance(transform.position, player.position);
+
+        if (sqrDistanceToPlayer > wanderRadiusSqr)
+        {
+            if (currentState != DogState.ReturningToPlayer)
+                EnterReturningToPlayerState();
+
+            UpdateReturningToPlayer(sqrDistanceToPlayer);
+            return;
+        }
+
+        currentAlienTarget = FindNearestAlienTarget();
+
+        if (currentAlienTarget != null)
+        {
+            if (currentState != DogState.WatchingAlien)
+                EnterWatchingAlienState();
+
+            UpdateWatchingAlien();
+            return;
+        }
+
+        if (currentState == DogState.WatchingAlien || currentState == DogState.ReturningToPlayer)
+        {
+            if (sqrDistanceToPlayer <= proximityRadiusSqr)
+                EnterWatchingPlayerState();
+            else
+                EnterWanderingState();
+        }
 
         switch (currentState)
         {
@@ -143,12 +190,6 @@ public sealed class Dog : MonoBehaviour
             return;
         }
 
-        if (sqrDistanceToPlayer > wanderRadiusSqr)
-        {
-            EnterReturningToPlayerState();
-            return;
-        }
-
         if (!hasDestination)
         {
             TryPickNewWanderDestination();
@@ -165,32 +206,26 @@ public sealed class Dog : MonoBehaviour
     private void UpdateWaiting(float sqrDistanceToPlayer)
     {
         if (sqrDistanceToPlayer <= proximityRadiusSqr)
-        {
             EnterWatchingPlayerState();
-            return;
-        }
-
-        if (sqrDistanceToPlayer > wanderRadiusSqr)
-        {
-            EnterReturningToPlayerState();
-        }
     }
 
     private void UpdateWatchingPlayer(float sqrDistanceToPlayer)
     {
-        if (sqrDistanceToPlayer > wanderRadiusSqr)
-        {
-            EnterReturningToPlayerState();
-            return;
-        }
-
         if (sqrDistanceToPlayer > proximityRadiusSqr)
         {
             EnterWanderingState();
             return;
         }
 
-        RotateTowardsPlayer();
+        RotateTowardsPosition(player.position);
+    }
+
+    private void UpdateWatchingAlien()
+    {
+        if (currentAlienTarget == null)
+            return;
+
+        RotateTowardsPosition(currentAlienTarget.position);
     }
 
     private void UpdateReturningToPlayer(float sqrDistanceToPlayer)
@@ -215,6 +250,8 @@ public sealed class Dog : MonoBehaviour
         StopWaiting();
 
         currentState = DogState.Wandering;
+        currentAlienTarget = null;
+
         agent.isStopped = false;
         agent.speed = wanderSpeed;
 
@@ -226,6 +263,7 @@ public sealed class Dog : MonoBehaviour
         StopWaiting();
 
         currentState = DogState.Waiting;
+        currentAlienTarget = null;
         hasDestination = false;
 
         agent.isStopped = true;
@@ -239,6 +277,18 @@ public sealed class Dog : MonoBehaviour
         StopWaiting();
 
         currentState = DogState.WatchingPlayer;
+        currentAlienTarget = null;
+        hasDestination = false;
+
+        agent.isStopped = true;
+        agent.ResetPath();
+    }
+
+    private void EnterWatchingAlienState()
+    {
+        StopWaiting();
+
+        currentState = DogState.WatchingAlien;
         hasDestination = false;
 
         agent.isStopped = true;
@@ -250,6 +300,8 @@ public sealed class Dog : MonoBehaviour
         StopWaiting();
 
         currentState = DogState.ReturningToPlayer;
+        currentAlienTarget = null;
+
         agent.isStopped = false;
         agent.speed = returnSpeed;
 
@@ -323,6 +375,63 @@ public sealed class Dog : MonoBehaviour
         hasDestination = agent.SetDestination(currentDestination);
     }
 
+    private Transform FindNearestAlienTarget()
+    {
+        if (alienDetectionResults == null || alienDetectionResults.Length != maxAlienColliders)
+            AllocateAlienDetectionBuffer();
+
+        int hitCount = Physics.OverlapSphereNonAlloc(
+            transform.position,
+            alienDetectionRadius,
+            alienDetectionResults,
+            alienDetectionLayers,
+            QueryTriggerInteraction.Collide
+        );
+
+        Transform nearestAlien = null;
+        float nearestSqrDistance = float.MaxValue;
+
+        for (int i = 0; i < hitCount; i++)
+        {
+            Collider hit = alienDetectionResults[i];
+
+            if (hit == null)
+                continue;
+
+            Transform candidate = GetAlienTransform(hit.transform);
+
+            if (candidate == null || candidate == transform)
+                continue;
+
+            float sqrDistance = GetFlatSqrDistance(transform.position, candidate.position);
+
+            if (sqrDistance > alienDetectionRadiusSqr)
+                continue;
+
+            if (sqrDistance < nearestSqrDistance)
+            {
+                nearestSqrDistance = sqrDistance;
+                nearestAlien = candidate;
+            }
+        }
+
+        return nearestAlien;
+    }
+
+    private Transform GetAlienTransform(Transform source)
+    {
+        if (source == null)
+            return null;
+
+        if (source.CompareTag(alienTag))
+            return source;
+
+        if (source.root != null && source.root.CompareTag(alienTag))
+            return source.root;
+
+        return null;
+    }
+
     private bool HasReachedDestination()
     {
         if (agent.pathPending)
@@ -337,9 +446,9 @@ public sealed class Dog : MonoBehaviour
         return true;
     }
 
-    private void RotateTowardsPlayer()
+    private void RotateTowardsPosition(Vector3 targetPosition)
     {
-        Vector3 direction = player.position - transform.position;
+        Vector3 direction = targetPosition - transform.position;
         direction.y = 0f;
 
         if (direction.sqrMagnitude < 0.0001f)
@@ -364,35 +473,61 @@ public sealed class Dog : MonoBehaviour
     {
         wanderRadius = Mathf.Max(0.1f, wanderRadius);
         proximityRadius = Mathf.Clamp(proximityRadius, 0f, wanderRadius);
+        alienDetectionRadius = Mathf.Max(0f, alienDetectionRadius);
+        maxAlienColliders = Mathf.Max(1, maxAlienColliders);
+
         maxDestinationAttempts = Mathf.Max(1, maxDestinationAttempts);
         navMeshSampleDistance = Mathf.Max(0.1f, navMeshSampleDistance);
         pointReachDistance = Mathf.Max(0.05f, pointReachDistance);
         minWaitTime = Mathf.Max(0f, minWaitTime);
         maxWaitTime = Mathf.Max(minWaitTime, maxWaitTime);
+
         wanderSpeed = Mathf.Max(0f, wanderSpeed);
         returnSpeed = Mathf.Max(wanderSpeed, returnSpeed);
         lookRotationSpeed = Mathf.Max(0f, lookRotationSpeed);
 
         proximityRadiusSqr = proximityRadius * proximityRadius;
         wanderRadiusSqr = wanderRadius * wanderRadius;
+        alienDetectionRadiusSqr = alienDetectionRadius * alienDetectionRadius;
+    }
+
+    private void AllocateAlienDetectionBuffer()
+    {
+        if (maxAlienColliders < 1)
+            maxAlienColliders = 1;
+
+        if (alienDetectionResults == null || alienDetectionResults.Length != maxAlienColliders)
+            alienDetectionResults = new Collider[maxAlienColliders];
     }
 
     private void OnDrawGizmosSelected()
     {
-        if (!drawGizmos || player == null)
+        if (!drawGizmos)
             return;
 
-        Gizmos.color = wanderRadiusColor;
-        Gizmos.DrawWireSphere(player.position, wanderRadius);
+        if (player != null)
+        {
+            Gizmos.color = wanderRadiusColor;
+            Gizmos.DrawWireSphere(player.position, wanderRadius);
 
-        Gizmos.color = proximityRadiusColor;
-        Gizmos.DrawWireSphere(player.position, proximityRadius);
+            Gizmos.color = proximityRadiusColor;
+            Gizmos.DrawWireSphere(player.position, proximityRadius);
+        }
+
+        Gizmos.color = alienDetectionRadiusColor;
+        Gizmos.DrawWireSphere(transform.position, alienDetectionRadius);
 
         if (Application.isPlaying && hasDestination)
         {
             Gizmos.color = destinationColor;
             Gizmos.DrawSphere(currentDestination, 0.2f);
             Gizmos.DrawLine(transform.position, currentDestination);
+        }
+
+        if (Application.isPlaying && currentAlienTarget != null)
+        {
+            Gizmos.color = alienDetectionRadiusColor;
+            Gizmos.DrawLine(transform.position, currentAlienTarget.position);
         }
     }
 }
